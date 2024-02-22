@@ -1,17 +1,5 @@
 #!/bin/bash
 
-# This Needs To be Changed According to Where It Is Running
-SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-#BASE_PYTHONPATH=${SOURCE_DIR%RabbitMQ*}RabbitMQ
-
-#echo "BASE PYTHONPATH: $BASE_PYTHONPATH"
-#
-#export PYTHONPATH=$BASE_PYTHONPATH:$PYTHONPATH
-#export PATH=/opt/miniconda3/bin:$PATH
-#export PATH=/teamdata/markc/ProgramFiles/anaconda3/bin:/teamdata/markc/ProgramFiles/anaconda3/condabin:$PATH
-
-# Start the publisher
-# We Can Calculate The Dates And Start Publisher For Each trade From here
 
 TRADE_NAME=$1
 #Rabbit MQ Setup On Server Then Change The IP Address HOST Current LocalHost
@@ -41,6 +29,7 @@ do
 done
 
 python3 RabbitMQ/Publisher/publisher.py $TRADE_NAME $CURR_DATE
+python3 RabbitMQ/Subscriber/subscriber.py $TRADE_NAME
 
 # Also This Needs To Be Changed According to Where It Is Running
 #python3 $BASE_PYTHONPATH/RabbitMQ/Publisher/publisher.py $TRADE_NAME $CURR_DATE
