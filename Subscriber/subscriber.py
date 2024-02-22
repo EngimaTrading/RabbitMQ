@@ -15,13 +15,22 @@ import sys
 
 # 3. Need To Ack message After Certain interval
 
+# 4. Need To Address Connection Issues
+
 class AsyncSubscriber:
+    """
+    This class is responsible for consuming messages from a queue.
+    """
     def __init__(self, queue_name: str):
         self.queue_name = queue_name
         self.connection = None
         self.channel = None
 
     async def establish_connection(self) -> None:
+        """
+        This method is responsible for establishing a connection to the RabbitMQ server.
+        :return:
+        """
         while True:
             try:
                 self.connection = await connect("amqp://guest:guest@localhost/")
@@ -34,14 +43,27 @@ class AsyncSubscriber:
                 await asyncio.sleep(5)
 
     async def on_message(self, message: IncomingMessage) -> None:
+        """
+        This method is called whenever a new message is received.
+        :param message:
+        :return:
+        """
         async with message.process():
             print(f" [x] Received: {message.body.decode()}")
 
     async def start_consuming(self) -> None:
+        """
+        This method is responsible for starting the consuming of messages from the queue.
+        :return:
+        """
         queue = await self.channel.declare_queue(self.queue_name)
         await queue.consume(self.on_message)
 
     async def run(self) -> None:
+        """
+        This method is responsible for running the subscriber.
+        :return:
+        """
         while True:
             try:
                 await self.establish_connection()
@@ -51,6 +73,10 @@ class AsyncSubscriber:
                 await asyncio.sleep(5)  # wait before trying to reconnect
 
     async def close_connection(self) -> None:
+        """
+        This method is responsible for closing the connection to the RabbitMQ server.
+        :return:
+        """
         if self.channel is not None:
             await self.channel.close()
         if self.connection is not None:
@@ -68,6 +94,12 @@ if __name__ == "__main__":
 
 
     async def shutdown(signal_name, subscriber):
+        """
+        This method is responsible for shutting down the subscriber. Even When Recieved The Signal
+        :param signal_name:
+        :param subscriber:
+        :return:
+        """
         logging.info(f"Received signal {signal_name}. Closing connection.")
         if subscriber.connection.is_open:
             await subscriber.close_connection()

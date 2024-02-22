@@ -17,13 +17,22 @@ from aio_pika import connect, Message, ExchangeType, exceptions
 
 # 3. Also Need To See If The File Is Not Getting Updated, Need To Check The File Issues
 
-# 4. Also One Case Like Is Of Inflight Messages We Want to amke it as robust as possibble to not drop message the
+# 4. Also One Case Like Is Of Inflight Messages We Want to amke it as robust as possible to not drop message the
 # queue is robust enough But In This Method We Currently Do not If The Subscriber Is Down And The Publisher Is Up,
 # The Messages May Be Lost
 
 class PositionManager:
+    """
+    This class is responsible for managing the position of the last read line in the log file.
+    """
     @staticmethod
     async def save_position(last_position: int, position_file: str) -> None:
+        """
+        This method is responsible for saving the last position to a file.
+        :param last_position:
+        :param position_file:
+        :return:
+        """
         try:
             async with aiofiles.open(position_file, 'w') as file:
                 await file.write(str(last_position))
@@ -32,6 +41,11 @@ class PositionManager:
 
     @staticmethod
     async def read_position(position_file: str) -> int:
+        """
+        This method is responsible for reading the last position from a file.
+        :param position_file:
+        :return:
+        """
         try:
             async with aiofiles.open(position_file, 'r') as file:
                 last_position = int((await file.read()).strip())
@@ -42,6 +56,9 @@ class PositionManager:
 
 
 class AsyncPublisher:
+    """
+    This class is responsible for publishing messages to a queue.
+    """
     def __init__(self, log_file_path: str, queue_name: str):
         self.log_file_path = log_file_path
         self.queue_name = queue_name
@@ -49,6 +66,10 @@ class AsyncPublisher:
         self.channel = None
 
     async def establish_connection(self) -> None:
+        """
+        This method is responsible for establishing a connection to the RabbitMQ server.
+        :return:
+        """
         while True:
             try:
                 self.connection = await connect("amqp://guest:guest@localhost/")
@@ -61,6 +82,11 @@ class AsyncPublisher:
                 await asyncio.sleep(5)
 
     async def publish_block(self, block: list) -> None:
+        """
+        This method is responsible for publishing a block of messages to the queue.
+        :param block:
+        :return:
+        """
         for message in block:
             await self.channel.default_exchange.publish(
                 Message(message.encode()),
@@ -68,6 +94,11 @@ class AsyncPublisher:
             )
 
     async def process_lines(self, file, last_position, lines_sent, max_lines_per_save, last_save_time):
+        """
+        This method is responsible for processing the lines in the log file. It reads the lines, publishes them to
+        the queue, Called By Monitor And Publish :param file: :param last_position: :param lines_sent: :param
+        max_lines_per_save: :param last_save_time: :return:
+        """
         while True:
             where = await file.tell()
             line = await file.readline()
@@ -93,12 +124,21 @@ class AsyncPublisher:
         return last_position, lines_sent, last_save_time
 
     async def close_connection(self) -> None:
+        """
+        This method is responsible for closing the connection to the RabbitMQ server.
+        :return:
+        """
         if self.channel is not None:
             await self.channel.close()
         if self.connection is not None:
             await self.connection.close()
 
     async def monitor_and_publish(self) -> None:
+        """
+        This method is responsible for monitoring the log file and publishing new lines to the queue. Also, it saves
+        the last position to a file every 2 minutes. We Will Decide On the Thresholds Later
+        :return:
+        """
         last_position = await PositionManager.read_position(f"{self.queue_name}_position.txt")
         last_publish_time = time.time()
         last_save_time = time.time()
@@ -144,7 +184,7 @@ async def main() -> None:
     trade_name = sys.argv[1]
     date = sys.argv[2]
 
-    log_file_path = f"/home/ajain/Analysis/{trade_name}-{date}.log"
+    log_file_path = f"/teamdata/enigma/logs/{trade_name}-{date}.log"
     queue_name = trade_name
 
     publisher = AsyncPublisher(log_file_path, queue_name)
