@@ -3,6 +3,9 @@ import logging
 import signal
 from aio_pika import connect, IncomingMessage, exceptions
 import sys
+from utils.InfluxDbManager import InfluxDBManager
+from message_handler import MessageHandler
+
 
 # TODOO
 
@@ -21,10 +24,11 @@ class AsyncSubscriber:
     """
     This class is responsible for consuming messages from a queue.
     """
-    def __init__(self, queue_name: str):
+    def __init__(self, queue_name: str, db: InfluxDBManager):
         self.queue_name = queue_name
         self.connection = None
         self.channel = None
+        self.message_handler = MessageHandler(db)
 
     async def establish_connection(self) -> None:
         """
@@ -50,6 +54,7 @@ class AsyncSubscriber:
         """
         async with message.process():
             print(f" [x] Received: {message.body.decode()}")
+            self.message_handler.process_message(message)
 
     async def start_consuming(self) -> None:
         """
@@ -84,13 +89,14 @@ class AsyncSubscriber:
 
 if __name__ == "__main__":
 
-    if len(sys.argv) < 2:
-        print("Usage: python your_script.py <queue_name>")
+    if len(sys.argv) < 3:
+        print("Usage: python your_script.py <queue_name> <host>")
         sys.exit(1)
 
     queue_name = sys.argv[1]
     # queue_name = "brz_frt3"
-    subscriber = AsyncSubscriber(queue_name)
+    db = InfluxDBManager(sys.argv[2], sys.argv[1])
+    subscriber = AsyncSubscriber(queue_name, db)
 
 
     async def shutdown(signal_name, subscriber):
