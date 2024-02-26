@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import queue
 import sys
 import time
 
@@ -21,10 +22,29 @@ from aio_pika import connect, Message, ExchangeType, exceptions
 # queue is robust enough But In This Method We Currently Do not If The Subscriber Is Down And The Publisher Is Up,
 # The Messages May Be Lost
 
+class DataQueue:
+    """
+    This class is responsible for creating a queue for the publisher and the worker threads.
+    """
+
+    def __init__(self):
+        self.queue = asyncio.Queue()
+
+    async def put(self, message: str) -> None:
+        await self.queue.put(message)
+
+    async def get(self) -> str:
+        return await self.queue.get()
+
+    def task_done(self) -> None:
+        self.queue.task_done()
+
+
 class PositionManager:
     """
     This class is responsible for managing the position of the last read line in the log file.
     """
+
     @staticmethod
     async def save_position(last_position: int, position_file: str) -> None:
         """
@@ -55,50 +75,17 @@ class PositionManager:
             return 0
 
 
-class AsyncPublisher:
+class FileReader:
     """
-    This class is responsible for publishing messages to a queue.
+    This class is responsible for reading the log file and writing to the DataQueue.
     """
-    def __init__(self, log_file_path: str, queue_name: str):
+
+    def __init__(self, log_file_path: str, queue_name: str, data_queue: DataQueue):
         self.log_file_path = log_file_path
         self.queue_name = queue_name
-        self.connection = None
-        self.channel = None
-
-    async def establish_connection(self) -> None:
-        """
-        This method is responsible for establishing a connection to the RabbitMQ server.
-        :return:
-        """
-        while True:
-            try:
-                self.connection = await connect("amqp://guest:guest@localhost/")
-                self.channel = await self.connection.channel()
-                await self.channel.declare_exchange(self.queue_name, ExchangeType.DIRECT)
-                await self.channel.declare_queue(self.queue_name, auto_delete=False)
-                break
-            except exceptions.AMQPError as e:
-                logging.error(f"Connection failed. Retrying in 5 seconds... Error: {e}")
-                await asyncio.sleep(5)
-
-    async def publish_block(self, block: list) -> None:
-        """
-        This method is responsible for publishing a block of messages to the queue.
-        :param block:
-        :return:
-        """
-        for message in block:
-            await self.channel.default_exchange.publish(
-                Message(message.encode()),
-                routing_key=self.queue_name,
-            )
+        self.data_queue = data_queue
 
     async def process_lines(self, file, last_position, lines_sent, max_lines_per_save, last_save_time):
-        """
-        This method is responsible for processing the lines in the log file. It reads the lines, publishes them to
-        the queue, Called By Monitor And Publish :param file: :param last_position: :param lines_sent: :param
-        max_lines_per_save: :param last_save_time: :return:
-        """
         while True:
             where = await file.tell()
             line = await file.readline()
@@ -109,10 +96,7 @@ class AsyncPublisher:
 
             message = line.strip()
             if message:
-                await self.channel.default_exchange.publish(
-                    Message(message.encode()),
-                    routing_key=self.queue_name,
-                )
+                await self.data_queue.put(message)
                 lines_sent += 1
                 last_position = await file.tell()
 
@@ -123,17 +107,7 @@ class AsyncPublisher:
 
         return last_position, lines_sent, last_save_time
 
-    async def close_connection(self) -> None:
-        """
-        This method is responsible for closing the connection to the RabbitMQ server.
-        :return:
-        """
-        if self.channel is not None:
-            await self.channel.close()
-        if self.connection is not None:
-            await self.connection.close()
-
-    async def monitor_and_publish(self) -> None:
+    async def read_file(self) -> None:
         """
         This method is responsible for monitoring the log file and publishing new lines to the queue. Also, it saves
         the last position to a file every 2 minutes. We Will Decide On the Thresholds Later
@@ -168,15 +142,78 @@ class AsyncPublisher:
                 except IOError as e:
                     logging.error(f"Error: Could not read the log file. Details: {e}")
                     await asyncio.sleep(5)  # Retry after 5 seconds
-                except exceptions.AMQPError as e:  # Handled For network issues
-                    logging.error(f"Connection lost. Retrying in 5 seconds... Error: {e}")
-                    await asyncio.sleep(5)  # wait before trying to reconnect
-                    await self.establish_connection()
+
+
+class AsyncPublisher:
+    """
+    This class is responsible for Publishing messages From a local queue.
+    """
+
+    def __init__(self, queue_name: str, data_queue: DataQueue):
+        self.queue_name = queue_name
+        self.connection = None
+        self.channel = None
+        self.data_queue = data_queue
+
+    async def establish_connection(self) -> None:
+        """
+        This method is responsible for establishing a connection to the RabbitMQ server.
+        :return:
+        """
+        while True:
+            try:
+                self.connection = await connect("amqp://guest:guest@localhost/")
+                self.channel = await self.connection.channel()
+                await self.channel.declare_exchange(self.queue_name, ExchangeType.DIRECT)
+                await self.channel.declare_queue(self.queue_name, auto_delete=False)
+                break
+            except exceptions.AMQPError as e:
+                logging.error(f"Connection failed. Retrying in 5 seconds... Error: {e}")
+                await asyncio.sleep(5)
+
+    async def publish_block(self, block: list) -> None:
+        """
+        This method is responsible for publishing a block of messages to the queue.
+        :param block:
+        :return:
+        """
+        for message in block:
+            await self.channel.default_exchange.publish(Message(message.encode()), routing_key=self.queue_name)
+
+    async def start_publishing(self) -> None:
+        """
+        This method is responsible for starting the publishing of messages to the queue.
+        :return:
+        """
+        block = []
+        while True:
+            try:
+                message = await self.data_queue.get()
+                print(f"Publishing: {message}")
+                block.append(message)
+                if len(block) >= 100:
+                    await self.publish_block(block)
+                    block = []
+                    self.data_queue.task_done()
+            except queue.Empty:
+                if block:
+                    await self.publish_block(block)
+                    block = []
+                await asyncio.sleep(1)
+
+    async def close_connection(self) -> None:
+        """
+        This method is responsible for closing the connection to the RabbitMQ server.
+        :return:
+        """
+        if self.channel is not None:
+            await self.channel.close()
+        if self.connection is not None:
+            await self.connection.close()
 
 
 async def main() -> None:
     global publisher
-
     if len(sys.argv) < 3:
         print("Usage: python your_script.py <trade_name> <date>")
         sys.exit(1)
@@ -184,12 +221,15 @@ async def main() -> None:
     trade_name = sys.argv[1]
     date = sys.argv[2]
 
-    log_file_path = f"/teamdata/enigma/logs/{trade_name}-{date}.log"
+    log_file_path = f"/home/ajain/Analysis/{trade_name}-{date}.log"
     queue_name = trade_name
 
-    publisher = AsyncPublisher(log_file_path, queue_name)
+    data_queue = DataQueue()
+    file_reader = FileReader(log_file_path, queue_name, data_queue)
+    publisher = AsyncPublisher(queue_name, data_queue)
     await publisher.establish_connection()
-    await asyncio.create_task(publisher.monitor_and_publish())
+    await asyncio.create_task(file_reader.read_file())
+    await asyncio.create_task(publisher.start_publishing())
 
 
 if __name__ == "__main__":
