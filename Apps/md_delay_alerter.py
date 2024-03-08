@@ -7,7 +7,7 @@ from LogParser.UpdateCycleInfo import UpdateCycleInfo, IsData
 import logging
 from slack_sender import SlackMessageSender
 
-THRESHOLD = 0.1  # Define your threshold here in Seconds
+THRESHOLD = 0.01  # Define threshold here in Seconds
 
 
 class RateLimiter:
@@ -44,7 +44,8 @@ class MD_Delay_Alerter:
                 update_cycle_info.ParseLine(split_line)
                 first_pkt_diff = ((update_cycle_info.first_pkt_rcv_ts - update_cycle_info.first_pkt_exch_ts) / 1e9) if update_cycle_info.first_pkt_rcv_ts and update_cycle_info.first_pkt_exch_ts else None
                 last_pkt_diff = ((update_cycle_info.last_pkt_rcv_ts - update_cycle_info.last_pkt_exch_ts) / 1e9) if update_cycle_info.last_pkt_rcv_ts and update_cycle_info.last_pkt_exch_ts else None
-                if first_pkt_diff and last_pkt_diff:
+                if first_pkt_diff or last_pkt_diff:
+                    print(message)
                     if abs(first_pkt_diff) > THRESHOLD or abs(last_pkt_diff) > THRESHOLD:
                         if self.rate_limiter.should_send(message):  # pass the message directly
                             await self.alert_queue.put((message, first_pkt_diff, last_pkt_diff))
@@ -56,7 +57,7 @@ class MD_Delay_Alerter:
             message, first_pkt_diff, last_pkt_diff = alert
             print(alert)
             formatted_message = f"```MD Delay threshold exceeded for Line:\n{message}\nFirst packet Difference: {first_pkt_diff}\nLast Packet Difference: {last_pkt_diff}```"
-            # await slack_sender.send_message(formatted_message)
+            await slack_sender.send_message(formatted_message)
             logging.warning(f"Threshold exceeded. Alert: {alert}")
 
 
@@ -65,7 +66,13 @@ async def main() -> None:
     md_delay_alerter = MD_Delay_Alerter(trade_name)
     task_process_messages = asyncio.create_task(md_delay_alerter.process_messages())
     task_get_alerts = asyncio.create_task(md_delay_alerter.get_alerts())
-    await asyncio.gather(task_process_messages, task_get_alerts)
+
+    try:
+        await asyncio.gather(task_process_messages, task_get_alerts)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await md_delay_alerter.subscriber.close_connection()
 
 
 if __name__ == "__main__":
