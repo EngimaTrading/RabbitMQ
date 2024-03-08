@@ -4,6 +4,7 @@ import queue
 import sys
 import time
 from datetime import datetime
+from message_parser import parse_message_type
 
 import aiofiles
 from aio_pika import connect, Message, ExchangeType, exceptions
@@ -102,22 +103,21 @@ class FileReader:
             message = line.strip()
             if message:
                 log_type = 'NONE'
-                msg_type = 'NONE'
+                msg_type = parse_message_type(message)
 
                 if 'INFO:' in message:
                     log_type = 'INFO'
-
-                if '|MD|' in message:
-                    msg_type = 'MD'
+                elif 'ERROR:' in message:
+                    log_type = 'ERROR'
 
                 await self.data_queue.put((message, log_type, msg_type))
                 lines_sent += 1
                 last_position = file.tell()
 
-                # if lines_sent >= max_lines_per_save:
-                #     await PositionManager.save_position(last_position, f"{self.queue_name}_position.txt")
-                #     last_save_time = time.time()
-                #     lines_sent = 0
+                if lines_sent >= max_lines_per_save:
+                    await PositionManager.save_position(last_position, f"{self.queue_name}_position.txt")
+                    last_save_time = time.time()
+                    lines_sent = 0
 
         return last_position, lines_sent, last_save_time,
 
@@ -127,7 +127,7 @@ class FileReader:
         the last position to a file every 2 minutes. We Will Decide On the Thresholds Later
         :return:
         """
-        last_position = 0  # PositionManager.read_position(f"{self.queue_name}_position.txt")
+        last_position = await PositionManager.read_position(f"{self.queue_name}_position.txt")
         last_publish_time = time.time()
         last_save_time = time.time()
         lines_sent = 0
@@ -144,7 +144,6 @@ class FileReader:
                                                                                          lines_sent, max_lines_per_save,
                                                                                          last_save_time)
 
-                    # print(f"Last position: {last_position}")
 
                     # Check for new data every 5 minutes
                     if time.time() - last_publish_time > 300:
@@ -153,7 +152,7 @@ class FileReader:
 
                     # Save the last position to the file every 2 minutes
                     if time.time() - last_save_time > 120:
-                        # PositionManager.save_position(last_position, f"{self.queue_name}_position.txt")
+                        PositionManager.save_position(last_position, f"{self.queue_name}_position.txt")
                         last_save_time = time.time()
 
                     await asyncio.sleep(0)
@@ -248,8 +247,8 @@ async def main() -> None:
     trade_name = sys.argv[1]
     date = sys.argv[2]
 
-    # log_file_path = f"/home/ajain/Analysis/{trade_name}-{date}.log"
-    log_file_path = f'/Users/hcorra/data/logs/brz_mid-20240117.log'
+    log_file_path = f"/home/ajain/Analysis/{trade_name}-{date}.log"
+    # log_file_path = f'/Users/hcorra/data/logs/brz_mid-20240117.log'
     queue_name = trade_name
 
     data_queue = asyncio.Queue()
